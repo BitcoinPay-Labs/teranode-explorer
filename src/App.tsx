@@ -1,48 +1,69 @@
 import { useEffect, useState, useCallback } from "react";
-import { api, BSV, classify, NETWORK_LABEL, BlockRow } from "./api";
+import {
+  api, BSV, classify, NETWORK_LABEL, BlockRow,
+  scriptToAddress, coinbaseTag, isCoinbaseInput,
+} from "./api";
 
-type View =
+type Route =
   | { v: "home" }
-  | { v: "block"; data: any }
-  | { v: "tx"; data: any; txid: string }
-  | { v: "address"; addr: string }
-  | { v: "error"; msg: string };
+  | { v: "block"; hash: string }
+  | { v: "tx"; txid: string }
+  | { v: "address"; addr: string };
+
+function parseHash(): Route {
+  const h = location.hash.replace(/^#\/?/, "");
+  const [kind, ...rest] = h.split("/");
+  const arg = decodeURIComponent(rest.join("/"));
+  if (kind === "block" && arg) return { v: "block", hash: arg };
+  if (kind === "tx" && arg) return { v: "tx", txid: arg };
+  if (kind === "address" && arg) return { v: "address", addr: arg };
+  return { v: "home" };
+}
+
+export const go = (path: string) => { location.hash = path; };
 
 export default function App() {
   const [q, setQ] = useState("");
-  const [view, setView] = useState<View>({ v: "home" });
+  const [route, setRoute] = useState<Route>(parseHash);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const onHash = () => { setErr(""); setRoute(parseHash()); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   const search = useCallback(async (raw: string) => {
     const term = raw.trim();
     if (!term) return;
     setBusy(true);
+    setErr("");
     try {
       const c = classify(term);
-      if (c.kind === "address") { setView({ v: "address", addr: c.value }); return; }
+      if (c.kind === "address") { go(`/address/${c.value}`); return; }
       if (c.kind === "height") {
         const { hash } = await api.blockHashByHeight(c.value);
-        const data = await api.blockByHash(hash);
-        setView({ v: "block", data }); return;
+        go(`/block/${hash}`); return;
       }
       // 64-hex: try block, then tx
       try {
         const data = await api.blockByHash(c.value);
-        if (data && (data.header || data.coinbase_tx)) { setView({ v: "block", data }); return; }
+        if (data && (data.header || data.coinbase_tx)) { go(`/block/${c.value}`); return; }
         throw new Error("not block");
       } catch {
-        const data = await api.tx(c.value);
-        setView({ v: "tx", data, txid: c.value });
+        await api.tx(c.value);
+        go(`/tx/${c.value}`);
       }
-    } catch (e: any) {
-      setView({ v: "error", msg: `見つかりません: ${term}` });
+    } catch {
+      setErr(`見つかりません: ${term}`);
     } finally { setBusy(false); }
   }, []);
 
   return (
     <div className="app">
       <header>
-        <div className="brand" onClick={() => setView({ v: "home" })}>
+        <div className="brand" onClick={() => go("/")}>
           <span className="logo">◆</span> Teranode Explorer
           <span className="net">{NETWORK_LABEL}</span>
         </div>
@@ -56,17 +77,17 @@ export default function App() {
         </form>
       </header>
       <main>
-        {view.v === "home" && <Home onOpen={search} />}
-        {view.v === "block" && <BlockView data={view.data} onOpen={search} />}
-        {view.v === "tx" && <TxView data={view.data} txid={view.txid} onOpen={search} />}
-        {view.v === "address" && <AddressView addr={view.addr} onOpen={search} />}
-        {view.v === "error" && <div className="card err">{view.msg}</div>}
+        {err && <div className="card err">{err}</div>}
+        {route.v === "home" && <Home />}
+        {route.v === "block" && <BlockView hash={route.hash} />}
+        {route.v === "tx" && <TxView txid={route.txid} />}
+        {route.v === "address" && <AddressView addr={route.addr} />}
       </main>
     </div>
   );
 }
 
-function Home({ onOpen }: { onOpen: (q: string) => void }) {
+function Home() {
   const [info, setInfo] = useState<any>(null);
   const [blocks, setBlocks] = useState<BlockRow[]>([]);
   useEffect(() => {
@@ -93,8 +114,8 @@ function Home({ onOpen }: { onOpen: (q: string) => void }) {
           <tbody>
             {blocks.map((b) => (
               <tr key={b.hash}>
-                <td><a onClick={() => onOpen(String(b.height))}>{b.height}</a></td>
-                <td className="mono"><a onClick={() => onOpen(b.hash)}>{shortHash(b.hash)}</a></td>
+                <td><a onClick={() => go(`/block/${b.hash}`)}>{b.height}</a></td>
+                <td className="mono"><a onClick={() => go(`/block/${b.hash}`)}>{shortHash(b.hash)}</a></td>
                 <td>{b.transactionCount}</td>
                 <td>{b.size} B</td>
                 <td className="miner">{b.miner}</td>
@@ -109,54 +130,91 @@ function Home({ onOpen }: { onOpen: (q: string) => void }) {
   );
 }
 
-function BlockView({ data, onOpen }: { data: any; onOpen: (q: string) => void }) {
+function BlockView({ hash }: { hash: string }) {
+  const [data, setData] = useState<any>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    setData(null); setErr("");
+    api.blockByHash(hash).then(setData).catch((e) => setErr(e.message || "取得エラー"));
+  }, [hash]);
+  if (err) return <div className="card err">{err}</div>;
+  if (!data) return <div className="card muted">読み込み中…</div>;
   const h = data.header || {};
   const cb = data.coinbase_tx || {};
+  const reward = (cb.outputs || []).reduce((s: number, o: any) => s + (o.satoshis || 0), 0);
+  const tag = cb.inputs?.[0]?.unlockingScript ? coinbaseTag(cb.inputs[0].unlockingScript) : "-";
   return (
     <div className="card">
-      <h2>ブロック</h2>
-      <Row k="ハッシュ" v={data.hash || cb.blockHash} mono />
-      <Row k="前ブロック" v={h.hash_prev_block} mono link={() => onOpen(h.hash_prev_block)} />
+      <h2>ブロック {data.height != null ? `#${data.height}` : ""}</h2>
+      <Row k="ハッシュ" v={hash} mono />
+      <Row k="前ブロック" v={h.hash_prev_block} mono link={() => go(`/block/${h.hash_prev_block}`)} />
       <Row k="Merkle root" v={h.hash_merkle_root} mono />
-      <Row k="timestamp" v={h.timestamp ? new Date(h.timestamp * 1000).toISOString() : "-"} />
+      <Row k="timestamp" v={h.timestamp ? new Date(h.timestamp * 1000).toLocaleString() : "-"} />
       <Row k="bits" v={h.bits} />
       <Row k="nonce" v={String(h.nonce)} />
       <Row k="Tx件数" v={String(data.transaction_count ?? "-")} />
-      <Row k="coinbase txid" v={cb.txid} mono link={cb.txid ? () => onOpen(cb.txid) : undefined} />
+      <Row k="サイズ" v={data.size_in_bytes != null ? `${data.size_in_bytes} B` : "-"} />
+      <Row k="マイナー" v={tag} />
+      <Row k="ブロック報酬" v={reward ? `${BSV(reward)} BSV` : "-"} />
+      <Row k="coinbase txid" v={cb.txid} mono link={cb.txid ? () => go(`/tx/${cb.txid}`) : undefined} />
     </div>
   );
 }
 
-function TxView({ data, txid, onOpen }: { data: any; txid: string; onOpen: (q: string) => void }) {
+function TxView({ txid }: { txid: string }) {
+  const [data, setData] = useState<any>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    setData(null); setErr("");
+    api.tx(txid).then(setData).catch((e) => setErr(e.message || "取得エラー"));
+  }, [txid]);
+  if (err) return <div className="card err">{err}</div>;
+  if (!data) return <div className="card muted">読み込み中…</div>;
   const ins = data.inputs || data.vin || [];
   const outs = data.outputs || data.vout || [];
+  const coinbase = ins.length > 0 && ins.every(isCoinbaseInput);
+  const totalOut = outs.reduce((s: number, o: any) => s + (o.satoshis ?? o.value ?? 0), 0);
   return (
     <div className="card">
-      <h2>トランザクション</h2>
+      <h2>トランザクション {coinbase && <span className="net">coinbase</span>}</h2>
       <Row k="txid" v={txid} mono />
+      <Row k="出力合計" v={`${BSV(totalOut)} BSV`} />
       <div className="io">
         <div>
           <h3>入力 ({ins.length})</h3>
-          {ins.map((i: any, n: number) => (
-            <div key={n} className="mono small">{shortHash(i.txid || i.previous_transaction?.txid || "coinbase")}</div>
-          ))}
+          {coinbase && <div className="small muted">新規発行（コインベース）</div>}
+          {!coinbase && ins.map((i: any, n: number) => {
+            const prev = i.txid || i.previous_transaction?.txid || "";
+            return (
+              <div key={n} className="mono small">
+                {prev ? <a onClick={() => go(`/tx/${prev}`)}>{shortHash(prev)}</a> : "-"}
+                {i.vout != null && <span className="muted">:{i.vout}</span>}
+              </div>
+            );
+          })}
         </div>
         <div>
           <h3>出力 ({outs.length})</h3>
-          {outs.map((o: any, n: number) => (
-            <div key={n} className="small">
-              <span className="mono">{shortHash(o.lockingScript || "")}</span>{" "}
-              <b>{BSV(o.satoshis ?? o.value ?? 0)} BSV</b>
-            </div>
-          ))}
+          {outs.map((o: any, n: number) => {
+            const addr = scriptToAddress(o.lockingScript || "");
+            return (
+              <div key={n} className="small histrow">
+                <span className="mono">
+                  {addr
+                    ? <a onClick={() => go(`/address/${addr}`)}>{addr}</a>
+                    : shortHash(o.lockingScript || "")}
+                </span>
+                <b>{BSV(o.satoshis ?? o.value ?? 0)} BSV</b>
+              </div>
+            );
+          })}
         </div>
       </div>
-      <button className="secondary" onClick={() => onOpen(txid)}>再読込</button>
     </div>
   );
 }
 
-function AddressView({ addr, onOpen }: { addr: string; onOpen: (q: string) => void }) {
+function AddressView({ addr }: { addr: string }) {
   const [bal, setBal] = useState<any>(null);
   const [utxos, setUtxos] = useState<any[]>([]);
   const [hist, setHist] = useState<any[]>([]);
@@ -181,8 +239,8 @@ function AddressView({ addr, onOpen }: { addr: string; onOpen: (q: string) => vo
       </div>
       <h3>取引履歴 ({hist.length})</h3>
       {hist.map((t: any) => (
-        <div key={t.tx_hash} className="mono small histrow">
-          <a onClick={() => onOpen(t.tx_hash)}>{shortHash(t.tx_hash)}</a>
+        <div key={`${t.tx_hash}-${t.height}`} className="mono small histrow">
+          <a onClick={() => go(`/tx/${t.tx_hash}`)}>{shortHash(t.tx_hash)}</a>
           <span className="muted">{t.height ? `#${t.height}` : "未確定"}</span>
         </div>
       ))}
