@@ -36,6 +36,19 @@ address views render them as tokens instead of raw script blobs:
 The structural probe follows `Dxs.Bsv`'s `DstasLockingScriptParser`; the parser is
 checked against the conformance vectors from `dxs-consigliere`.
 
+The presentation follows the shape Etherscan uses for tokens and NFTs:
+
+- **tx view** — a "トークン移転" list above the raw inputs/outputs, one
+  `From … → To … For <amount> <token>` line per token output, with an issuer
+  avatar; the sender side is resolved by reading the spent outputs, and an output
+  with no matching input frame is labelled 発行 (mint)
+- **address view** — a token holdings table (avatar, name, amount, UTXO count) and
+  an NFT gallery of item cards, one card per NFT UTXO (collapsed only when the
+  issuer labels several with the same token id)
+- **item detail** — issuer, holder, compliance authorities, and OpenSea-style trait
+  tiles built from `attributes` / `traits` / `properties`, with the raw metadata
+  JSON tucked behind a disclosure
+
 **Indexer caveat**: the address index keys on the P2PKH pattern
 (`76a914…88ac`), which a STAS frame does not match — its owner is a bare 20-byte
 push. Token UTXOs therefore only show up on an address page if the indexer learns

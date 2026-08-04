@@ -184,11 +184,38 @@ function BlockView({ hash }: { hash: string }) {
 
 function TxView({ txid }: { txid: string }) {
   const [data, setData] = useState<any>(null);
+  const [inFrames, setInFrames] = useState<StasFrame[]>([]);
   const [err, setErr] = useState("");
   useEffect(() => {
-    setData(null); setErr("");
+    setData(null); setInFrames([]); setErr("");
     api.tx(txid).then(setData).catch((e) => setErr(e.message || "取得エラー"));
   }, [txid]);
+
+  // Resolve the sender side by reading the spent outputs. Only worth doing when
+  // this transaction actually carries tokens.
+  useEffect(() => {
+    if (!data) return;
+    const outs = data.outputs || data.vout || [];
+    if (!outs.some((o: any) => parseStas(o.lockingScript || ""))) return;
+    const ins = (data.inputs || data.vin || []).filter((i: any) => !isCoinbaseInput(i));
+    let cancelled = false;
+    Promise.all(
+      ins.map(async (i: any) => {
+        const prevTxid = i.txid || i.previous_transaction?.txid;
+        if (!prevTxid || i.vout == null) return null;
+        try {
+          const prev = await api.tx(prevTxid);
+          const po = (prev.outputs || prev.vout || [])[i.vout];
+          return parseStas(po?.lockingScript || "");
+        } catch {
+          return null;
+        }
+      }),
+    ).then((frames) => {
+      if (!cancelled) setInFrames(frames.filter(Boolean) as StasFrame[]);
+    });
+    return () => { cancelled = true; };
+  }, [data]);
   if (err) return <div className="card err">{err}</div>;
   if (!data) return <div className="card muted">読み込み中…</div>;
   const ins = data.inputs || data.vin || [];
@@ -202,6 +229,7 @@ function TxView({ txid }: { txid: string }) {
     (s: number, o: any, i: number) => (frames[i] ? s : s + (o.satoshis ?? o.value ?? 0)),
     0,
   );
+  const transfers = buildTransfers(frames, outs, inFrames);
   return (
     <div className="card">
       <h2>トランザクション {coinbase && <span className="net">coinbase</span>}</h2>
@@ -211,6 +239,12 @@ function TxView({ txid }: { txid: string }) {
         v={`${fmtAmount(totalOut)} ${SYMBOL}`}
       />
       {tokenCount > 0 && <Row k="トークン出力" v={`${tokenCount} 件 (STAS 3.0)`} />}
+      {transfers.length > 0 && (
+        <>
+          <h3>トークン移転 ({transfers.length})</h3>
+          {transfers.map((t, n) => <TransferRow key={n} t={t} />)}
+        </>
+      )}
       <div className="io">
         <div>
           <h3>入力 ({ins.length})</h3>
@@ -231,15 +265,17 @@ function TxView({ txid }: { txid: string }) {
             const script = o.lockingScript || "";
             const addr = scriptToAddress(script);
             const token = frames[n];
-            if (token) return <StasOutput key={n} frame={token} satoshis={o.satoshis ?? o.value ?? 0} />;
+            const sats = o.satoshis ?? o.value ?? 0;
             return (
               <div key={n} className="small histrow">
                 <span className="mono">
-                  {addr
-                    ? <a onClick={() => go(`/address/${addr}`)}>{addr}</a>
-                    : shortHash(script)}
+                  {token
+                    ? <span className="muted">STAS フレーム（上の移転を参照）</span>
+                    : addr
+                      ? <a onClick={() => go(`/address/${addr}`)}>{addr}</a>
+                      : shortHash(script)}
                 </span>
-                <b>{fmtAmount(o.satoshis ?? o.value ?? 0)} {SYMBOL}</b>
+                <b>{token ? `${fmtUnits(sats)} 単位` : `${fmtAmount(sats)} ${SYMBOL}`}</b>
               </div>
             );
           })}
@@ -247,6 +283,44 @@ function TxView({ txid }: { txid: string }) {
       </div>
     </div>
   );
+}
+
+/** One row of the "Tokens Transferred" list: who sent what to whom. */
+interface Transfer {
+  frame: StasFrame;
+  units: number;
+  from: string | null;
+  /** No matching input frame — the issuance mints here. */
+  minted: boolean;
+  to: string | null;
+}
+
+/**
+ * Match input frames to output frames per issuance, so a spend reads as
+ * "from → to" rather than as two unrelated UTXOs. Inputs of an issuance are
+ * consumed in order; an output with no input left over is a mint.
+ */
+function buildTransfers(outFrames: Array<StasFrame | null>, outs: any[], inFrames: StasFrame[]): Transfer[] {
+  const pool = new Map<string, StasFrame[]>();
+  for (const f of inFrames) {
+    const list = pool.get(f.protoId) || [];
+    list.push(f);
+    pool.set(f.protoId, list);
+  }
+  const rows: Transfer[] = [];
+  outFrames.forEach((f, i) => {
+    if (!f) return;
+    const src = pool.get(f.protoId);
+    const prev = src && src.length ? src.shift()! : null;
+    rows.push({
+      frame: f,
+      units: outs[i]?.satoshis ?? outs[i]?.value ?? 0,
+      from: prev ? (prev.ownerUnlocked ? null : prev.ownerAddress) : null,
+      minted: !prev,
+      to: f.ownerUnlocked ? null : f.ownerAddress,
+    });
+  });
+  return rows;
 }
 
 function AddressView({ addr }: { addr: string }) {
@@ -263,6 +337,8 @@ function AddressView({ addr }: { addr: string }) {
   const holdings = useMemo(() => stasHoldings(utxos), [utxos]);
   // The indexer counts every UTXO in satoshis, but a token frame's satoshi value
   // is its token amount — subtract it so the BSV balance is not overstated.
+  const fungible = holdings.filter((h) => !h.frame.flags.nft);
+  const nfts = holdings.filter((h) => h.frame.flags.nft);
   const tokenSats = holdings.reduce((s, h) => s + h.units, 0);
   const spendable = bal ? (bal.spendable ?? bal.confirmed ?? 0) - tokenSats : 0;
   if (err) return <div className="card err">{err}</div>;
@@ -280,24 +356,39 @@ function AddressView({ addr }: { addr: string }) {
         <Stat label="未確定" value={bal ? `${fmtAmount(bal.unconfirmed || 0)} ${SYMBOL}` : "…"} />
         <Stat label="UTXO件数" value={String(utxos.length)} />
       </div>
-      {holdings.length > 0 && (
+      {fungible.length > 0 && (
         <>
-          <h3>保有トークン ({holdings.length})</h3>
-          {holdings.map((h) => (
-            <div key={`${h.frame.protoId}-${h.frame.flags.nft}`} className="stas-out">
-              <div className="small histrow">
-                <span className="mono">
-                  {shortHash(stasMeta(h.frame).name || h.frame.protoAddress || h.frame.protoId)}
-                  <StasBadges f={h.frame} />
-                </span>
-                <b>
-                  {h.frame.flags.nft
-                    ? `${h.count} 点`
-                    : `${fmtUnits(h.units)} 単位 / ${h.count} UTXO`}
-                </b>
-              </div>
-            </div>
-          ))}
+          <h3>トークン保有 ({fungible.length})</h3>
+          <table className="tok-table">
+            <thead>
+              <tr><th>トークン</th><th>数量</th><th className="num">UTXO</th></tr>
+            </thead>
+            <tbody>
+              {fungible.map((h) => (
+                <tr key={h.frame.protoId}>
+                  <td>
+                    <div className="tok-cell">
+                      <TokenIcon frame={h.frame} size={26} />
+                      <span>{tokenLabel(h.frame)}</span>
+                      <StasBadges f={h.frame} />
+                    </div>
+                  </td>
+                  <td><b>{fmtUnits(h.units)}</b></td>
+                  <td className="num muted">{h.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {nfts.length > 0 && (
+        <>
+          <h3>NFT ({nfts.reduce((s, h) => s + h.count, 0)})</h3>
+          <div className="nft-grid">
+            {nfts.map((h, i) => (
+              <NftCard key={`${h.frame.protoId}-${i}`} frame={h.frame} count={h.count} />
+            ))}
+          </div>
         </>
       )}
       <h3>取引履歴 ({hist.length})</h3>
@@ -378,9 +469,13 @@ function StasDetail({ f }: { f: StasFrame }) {
       )}
       <Row k="エンジン" v={`${f.engineBytes.toLocaleString()} B`} />
       {img && <img className="stas-img" src={img} alt={meta.name || "token image"} loading="lazy" />}
+      <TraitGrid traits={meta.traits} />
       {f.payloadText && !f.payloadJson && <Row k="データ" v={f.payloadText} />}
       {f.payloadJson && (
-        <pre className="stas-json mono small">{JSON.stringify(f.payloadJson, null, 2)}</pre>
+        <details className="stas-raw">
+          <summary className="small muted">メタデータ JSON</summary>
+          <pre className="stas-json mono small">{JSON.stringify(f.payloadJson, null, 2)}</pre>
+        </details>
       )}
       {!f.payloadText && f.payloads.length > 0 && (
         <Row k="データ" v={`${f.payloads.length} 件 (バイナリ ${f.payloads.join("").length / 2} B)`} mono />
@@ -389,38 +484,126 @@ function StasDetail({ f }: { f: StasFrame }) {
   );
 }
 
-function StasOutput({ frame, satoshis }: { frame: StasFrame; satoshis: number }) {
+/** Token avatar: the issuer image when there is one, else an initial disc. */
+function TokenIcon({ frame, size = 34 }: { frame: StasFrame; size?: number }) {
+  const meta = stasMeta(frame);
+  const img = meta.image && /^https:\/\//.test(meta.image) ? meta.image : null;
+  const initial = (meta.symbol || meta.name || "?").trim().charAt(0).toUpperCase();
+  const style = { width: size, height: size, fontSize: Math.round(size * 0.42) };
+  if (img) {
+    return <img className="tok-icon" style={style} src={img} alt={meta.name || "token"} loading="lazy" />;
+  }
+  return (
+    <span className={"tok-icon tok-initial" + (frame.flags.nft ? " nft" : "")} style={style}>
+      {initial}
+    </span>
+  );
+}
+
+const tokenLabel = (frame: StasFrame): string => {
+  const meta = stasMeta(frame);
+  if (meta.name && meta.symbol) return `${meta.name} (${meta.symbol})`;
+  return meta.name || meta.symbol || `STAS ${shortHash(frame.protoId)}`;
+};
+
+/** Etherscan-style "From … To … For …" line, expandable into the frame detail. */
+function TransferRow({ t }: { t: Transfer }) {
+  const [open, setOpen] = useState(false);
+  const meta = stasMeta(t.frame);
+  const tokenId = meta.tokenId ? `#${meta.tokenId}` : null;
+  return (
+    <div className="xfer">
+      <div className="xfer-main">
+        <TokenIcon frame={t.frame} />
+        <div className="xfer-body">
+          <div className="xfer-line small">
+            <span className="muted">From</span>
+            {t.minted
+              ? <span className="pill mint">発行</span>
+              : t.from
+                ? <a className="mono" onClick={() => go(`/address/${t.from}`)}>{shortHash(t.from)}</a>
+                : <span className="muted mono">-</span>}
+            <span className="arrow">→</span>
+            <span className="muted">To</span>
+            {t.to
+              ? <a className="mono" onClick={() => go(`/address/${t.to}`)}>{shortHash(t.to)}</a>
+              : <span className="muted">署名検証なし</span>}
+          </div>
+          <div className="xfer-line small">
+            <span className="muted">For</span>
+            {t.frame.flags.nft
+              ? <b>{tokenId || "1 点"}</b>
+              : <b>{fmtUnits(t.units)}</b>}
+            <a className="tok-name" onClick={() => setOpen(!open)}>{tokenLabel(t.frame)}</a>
+            <StasBadges f={t.frame} />
+            <a className="stas-toggle muted" onClick={() => setOpen(!open)}>{open ? "詳細を閉じる" : "詳細"}</a>
+          </div>
+        </div>
+      </div>
+      {open && <StasDetail f={t.frame} />}
+    </div>
+  );
+}
+
+/** Trait tiles, the way an NFT marketplace / Etherscan item page shows them. */
+function TraitGrid({ traits }: { traits: Array<{ name: string; value: string }> }) {
+  if (!traits.length) return null;
+  return (
+    <div className="traits">
+      {traits.map((t, i) => (
+        <div key={i} className="trait">
+          <div className="trait-k">{t.name || "属性"}</div>
+          <div className="trait-v">{t.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** NFT gallery card used on the address page. */
+function NftCard({ frame, count }: { frame: StasFrame; count: number }) {
   const [open, setOpen] = useState(false);
   const meta = stasMeta(frame);
-  const label = meta.name || meta.symbol || frame.protoAddress || frame.protoId;
+  const img = meta.image && /^https:\/\//.test(meta.image) ? meta.image : null;
   return (
-    <div className="stas-out">
-      <div className="small histrow">
-        <span className="mono">
-          <a className="stas-toggle" onClick={() => setOpen(!open)}>
-            {open ? "▾" : "▸"} {shortHash(label)}
-          </a>
-          <StasBadges f={frame} />
-        </span>
-        <b>{frame.flags.nft ? "1 点" : `${fmtUnits(satoshis)} 単位`}</b>
+    <div className="nft-card">
+      <div className="nft-art" onClick={() => setOpen(!open)}>
+        {img
+          ? <img src={img} alt={meta.name || "NFT"} loading="lazy" />
+          : <span className="nft-ph">{(meta.symbol || meta.name || "NFT").slice(0, 4).toUpperCase()}</span>}
+        {count > 1 && <span className="nft-count">×{count}</span>}
+      </div>
+      <div className="nft-meta">
+        <div className="nft-name">{meta.name || `STAS ${shortHash(frame.protoId)}`}</div>
+        <div className="small muted">
+          {meta.tokenId ? `#${meta.tokenId}` : "NFT"}
+          {frame.frozen && " · 凍結中"}
+        </div>
       </div>
       {open && <StasDetail f={frame} />}
     </div>
   );
 }
 
-/** Group STAS UTXOs of an address by issuance, for the holdings table. */
+/**
+ * Group an address's STAS UTXOs for the holdings views. Fungible frames collapse
+ * per issuance; an NFT is one item per UTXO, so it only collapses when the issuer
+ * labels several UTXOs with the same token id.
+ */
 function stasHoldings(utxos: any[]): Array<{ frame: StasFrame; count: number; units: number }> {
-  const byProto = new Map<string, { frame: StasFrame; count: number; units: number }>();
-  for (const u of utxos) {
+  const groups = new Map<string, { frame: StasFrame; count: number; units: number }>();
+  utxos.forEach((u, i) => {
     const f = parseStas(u.script || "");
-    if (!f) continue;
-    const key = `${f.protoId}:${f.flags.nft}`;
-    const cur = byProto.get(key);
+    if (!f) return;
+    const id = stasMeta(f).tokenId;
+    const key = f.flags.nft
+      ? `${f.protoId}:nft:${id ?? `${u.tx_hash}:${u.tx_pos ?? i}`}`
+      : `${f.protoId}:ft`;
+    const cur = groups.get(key);
     if (cur) { cur.count++; cur.units += u.value ?? u.satoshis ?? 0; }
-    else byProto.set(key, { frame: f, count: 1, units: u.value ?? u.satoshis ?? 0 });
-  }
-  return [...byProto.values()].sort((a, b) => b.units - a.units);
+    else groups.set(key, { frame: f, count: 1, units: u.value ?? u.satoshis ?? 0 });
+  });
+  return [...groups.values()].sort((a, b) => b.units - a.units);
 }
 
 function Stat({ label, value, mono }: { label: string; value: any; mono?: boolean }) {

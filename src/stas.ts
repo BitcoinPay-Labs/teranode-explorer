@@ -257,15 +257,29 @@ export function parseStas(lockingScript: string): StasFrame | null {
 /** Short human label for the token class, e.g. "NFT" / "トークン". */
 export const stasKind = (f: StasFrame): string => (f.flags.nft ? "NFT" : "トークン");
 
+export interface StasTrait { name: string; value: string }
+
+export interface StasMeta {
+  name?: string;
+  symbol?: string;
+  image?: string;
+  description?: string;
+  /** Token id of an NFT, when the issuer numbers its items. */
+  tokenId?: string;
+  /** OpenSea-style attribute list, or a flat properties object. */
+  traits: StasTrait[];
+}
+
 /** Name/symbol/image lifted from a JSON payload, when the issuer supplies one. */
-export function stasMeta(f: StasFrame): { name?: string; symbol?: string; image?: string; description?: string } {
+export function stasMeta(f: StasFrame): StasMeta {
   const j = f.payloadJson;
-  if (!j || typeof j !== "object") return {};
+  if (!j || typeof j !== "object") return { traits: [] };
   const bag = (j.token ?? j.tokenSchema ?? j) as any;
   const pick = (...keys: string[]) => {
     for (const k of keys) {
       const v = bag?.[k] ?? j?.[k];
       if (typeof v === "string" && v.trim()) return v.trim();
+      if (typeof v === "number") return String(v);
     }
     return undefined;
   };
@@ -274,5 +288,30 @@ export function stasMeta(f: StasFrame): { name?: string; symbol?: string; image?
     symbol: pick("symbol", "ticker", "symbolId"),
     description: pick("description", "desc"),
     image: pick("image", "imageUrl", "icon", "media"),
+    tokenId: pick("tokenId", "token_id", "id", "serial", "edition"),
+    traits: extractTraits(bag ?? j),
   };
+}
+
+function extractTraits(bag: any): StasTrait[] {
+  const out: StasTrait[] = [];
+  const push = (name: any, value: any) => {
+    if (name == null || value == null) return;
+    if (typeof value === "object") return;
+    out.push({ name: String(name), value: String(value) });
+  };
+  const list = bag?.attributes ?? bag?.traits;
+  if (Array.isArray(list)) {
+    for (const a of list) {
+      if (a && typeof a === "object") push(a.trait_type ?? a.traitType ?? a.name ?? a.key, a.value ?? a.val);
+      else push("", a);
+    }
+  } else if (list && typeof list === "object") {
+    for (const [k, v] of Object.entries(list)) push(k, v);
+  }
+  const props = bag?.properties;
+  if (props && typeof props === "object" && !Array.isArray(props)) {
+    for (const [k, v] of Object.entries(props)) push(k, v);
+  }
+  return out;
 }

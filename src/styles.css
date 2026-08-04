@@ -57,6 +57,52 @@ td { padding: 8px; border-bottom: 1px solid #1c1c2a; }
   padding: 10px; overflow-x: auto; max-height: 260px; margin: 8px 0 0; }
 .stas-img { max-width: 180px; max-height: 180px; border-radius: 8px;
   border: 1px solid var(--border); margin-top: 10px; display: block; }
+.stas-raw { margin-top: 10px; }
+.stas-raw summary { cursor: pointer; }
+
+/* token avatar */
+.tok-icon { border-radius: 50%; flex: none; object-fit: cover;
+  border: 1px solid var(--border); background: #0e0e17; }
+.tok-initial { display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; color: #cfd2ff; background: linear-gradient(160deg, #2a2a3d, #1b1b29); }
+.tok-initial.nft { color: #cbb6ff; background: linear-gradient(160deg, #3b2a5e, #221a34); }
+
+/* "Tokens Transferred" rows */
+.xfer { border-bottom: 1px solid #1c1c2a; padding: 10px 0; }
+.xfer:last-of-type { border-bottom: 0; }
+.xfer-main { display: flex; gap: 10px; align-items: flex-start; }
+.xfer-body { min-width: 0; flex: 1; }
+.xfer-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; line-height: 1.9; }
+.xfer-line .arrow { color: var(--muted); }
+.tok-name { font-weight: 600; }
+.pill { font-size: 10px; padding: 3px 7px; border-radius: 999px; background: #2a2a3d; color: var(--muted); }
+.pill.mint { background: #16351f; color: #7fd39b; }
+
+/* token holdings table */
+.tok-table td { vertical-align: middle; }
+.tok-table .num { text-align: right; }
+.tok-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* NFT gallery */
+.nft-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.nft-card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: #0e0e17; }
+.nft-art { position: relative; aspect-ratio: 1; display: flex; align-items: center;
+  justify-content: center; cursor: pointer; background: linear-gradient(160deg, #241c3a, #14141f); }
+.nft-art img { width: 100%; height: 100%; object-fit: cover; }
+.nft-ph { font-weight: 800; letter-spacing: 1px; color: #6d6a9c; font-size: 18px; }
+.nft-count { position: absolute; right: 8px; top: 8px; background: rgba(0, 0, 0, .6);
+  color: var(--fg); font-size: 11px; padding: 2px 7px; border-radius: 999px; }
+.nft-meta { padding: 9px 10px; }
+.nft-name { font-size: 13px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.nft-card .stas-detail { padding: 0 10px 10px; border-left: 0; margin-left: 0; }
+
+/* trait tiles */
+.traits { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px; margin-top: 10px; }
+.trait { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: #0e0e17; }
+.trait-k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+.trait-v { font-size: 13px; font-weight: 600; margin-top: 3px; word-break: break-word; }
 @media (max-width: 720px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .io { grid-template-columns: 1fr; }
