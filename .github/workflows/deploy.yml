@@ -10,7 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  VITE_INDEXER: http://162.43.7.61:18101
+  # https://e.btcp.io からは Caddy の /api/* プロキシ経由で indexer を叩く。
+  # 生ポート (http://162.43.7.61:18101) を埋め込むと mixed content でブロックされる。
+  VITE_INDEXER: /api
   VITE_NETWORK: Teratestnet
 
 jobs:
