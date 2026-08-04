@@ -10,9 +10,8 @@ type Route =
   | { v: "tx"; txid: string }
   | { v: "address"; addr: string };
 
-function parseHash(): Route {
-  const h = location.hash.replace(/^#\/?/, "");
-  const [kind, ...rest] = h.split("/");
+function parsePath(raw: string): Route {
+  const [kind, ...rest] = raw.replace(/^\/+/, "").split("/");
   const arg = decodeURIComponent(rest.join("/"));
   if (kind === "block" && arg) return { v: "block", hash: arg };
   if (kind === "tx" && arg) return { v: "tx", txid: arg };
@@ -20,19 +19,39 @@ function parseHash(): Route {
   return { v: "home" };
 }
 
-export const go = (path: string) => { location.hash = path; };
+// 正規の形は /address/{addr} などのパス。ウォレットや過去に共有された
+// #/tx/{txid} 形式のリンクも読めるよう、hash が付いていればそちらを優先する。
+function currentRoute(): Route {
+  const h = location.hash.replace(/^#\/?/, "");
+  return h ? parsePath(h) : parsePath(location.pathname);
+}
+
+export const go = (path: string) => {
+  if (location.pathname + location.hash === path) return;
+  history.pushState(null, "", path);
+  dispatchEvent(new PopStateEvent("popstate"));
+};
 
 export default function App() {
   const [q, setQ] = useState("");
-  const [route, setRoute] = useState<Route>(parseHash);
+  const [route, setRoute] = useState<Route>(currentRoute);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   useEffect(() => {
     document.title = APP_TITLE;
-    const onHash = () => { setErr(""); setRoute(parseHash()); };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    // hash 形式で開かれた場合はパス形式に書き直す（表示中の画面はそのまま）
+    if (location.hash) {
+      const h = location.hash.replace(/^#\/?/, "");
+      history.replaceState(null, "", h ? `/${h}` : "/");
+    }
+    const onNav = () => { setErr(""); setRoute(currentRoute()); };
+    window.addEventListener("popstate", onNav);
+    window.addEventListener("hashchange", onNav);
+    return () => {
+      window.removeEventListener("popstate", onNav);
+      window.removeEventListener("hashchange", onNav);
+    };
   }, []);
 
   const search = useCallback(async (raw: string) => {
