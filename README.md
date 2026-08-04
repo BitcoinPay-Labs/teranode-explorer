@@ -48,11 +48,13 @@ The presentation follows the shape Etherscan uses for tokens and NFTs:
 - **item detail** — issuer, holder, compliance authorities, and OpenSea-style trait
   tiles built from `attributes` / `traits` / `properties`, with the raw metadata
   JSON tucked behind a disclosure
+- **token tracker** — `/tokens` lists every issuance in the UTXO set and
+  `/token/{protoID}` is its tracker page: supply, holder count, UTXO count, first
+  block, compliance authorities, a holders table with percentages, and the
+  transfer history. Backed by the indexer's `/tokens` and `/token/*` endpoints
 
-**Indexer caveat**: the address index keys on the P2PKH pattern
-(`76a914…88ac`), which a STAS frame does not match — its owner is a bare 20-byte
-push. Token UTXOs therefore only show up on an address page if the indexer learns
-to index the STAS owner field; token rendering inside a transaction works today.
+The indexer indexes STAS owners and issuances as of `teranode-indexer` ec2f211, so
+token UTXOs appear on address pages and the tracker pages are populated.
 
 ## Stack
 

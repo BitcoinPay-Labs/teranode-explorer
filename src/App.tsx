@@ -1,15 +1,17 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   api, fmtAmount, fmtBsv, classify, NETWORK_LABEL, APP_TITLE, SYMBOL, LOGO, BlockRow,
-  scriptToAddress, coinbaseTag, isCoinbaseInput, hash160ToAddress,
+  scriptToAddress, coinbaseTag, isCoinbaseInput, hash160ToAddress, TokenRow, TokenHolder,
 } from "./api";
-import { parseStas, stasKind, stasMeta, StasFrame } from "./stas";
+import { parseStas, stasKind, stasMeta, StasFrame, StasMeta } from "./stas";
 
 type Route =
   | { v: "home" }
   | { v: "block"; hash: string }
   | { v: "tx"; txid: string }
-  | { v: "address"; addr: string };
+  | { v: "address"; addr: string }
+  | { v: "tokens" }
+  | { v: "token"; id: string };
 
 function parsePath(raw: string): Route {
   const [kind, ...rest] = raw.replace(/^\/+/, "").split("/");
@@ -17,6 +19,8 @@ function parsePath(raw: string): Route {
   if (kind === "block" && arg) return { v: "block", hash: arg };
   if (kind === "tx" && arg) return { v: "tx", txid: arg };
   if (kind === "address" && arg) return { v: "address", addr: arg };
+  if (kind === "token" && arg) return { v: "token", id: arg.toLowerCase() };
+  if (kind === "tokens") return { v: "tokens" };
   return { v: "home" };
 }
 
@@ -88,6 +92,9 @@ export default function App() {
           {LOGO && <span className="logo">{LOGO}</span>} {APP_TITLE}
           <span className="net">{NETWORK_LABEL}</span>
         </div>
+        <nav className="nav small">
+          <a onClick={() => go("/tokens")}>トークン</a>
+        </nav>
         <form className="searchbar" onSubmit={(e) => { e.preventDefault(); search(q); }}>
           <input
             value={q}
@@ -103,6 +110,8 @@ export default function App() {
         {route.v === "block" && <BlockView hash={route.hash} />}
         {route.v === "tx" && <TxView txid={route.txid} />}
         {route.v === "address" && <AddressView addr={route.addr} />}
+        {route.v === "tokens" && <TokensView />}
+        {route.v === "token" && <TokenView id={route.id} />}
       </main>
     </div>
   );
@@ -369,7 +378,7 @@ function AddressView({ addr }: { addr: string }) {
                   <td>
                     <div className="tok-cell">
                       <TokenIcon frame={h.frame} size={26} />
-                      <span>{tokenLabel(h.frame)}</span>
+                      <a onClick={() => go(`/token/${h.frame.protoId}`)}>{tokenLabel(h.frame)}</a>
                       <StasBadges f={h.frame} />
                     </div>
                   </td>
@@ -399,6 +408,142 @@ function AddressView({ addr }: { addr: string }) {
         </div>
       ))}
       {hist.length === 0 && <div className="muted">履歴なし</div>}
+    </div>
+  );
+}
+
+// ---- token tracker pages --------------------------------------------------
+
+/** Frame parsed from an issuance's sample script, for name/symbol/flags. */
+const rowFrame = (r: { script: string | null }): StasFrame | null => parseStas(r.script || "");
+
+function TokensView() {
+  const [rows, setRows] = useState<TokenRow[] | null>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.tokens().then(setRows).catch((e) => setErr(e.message || "取得エラー"));
+  }, []);
+  if (err) return <div className="card err">{err}</div>;
+  if (!rows) return <div className="card muted">読み込み中…</div>;
+  return (
+    <div className="card">
+      <h2>トークン ({rows.length})</h2>
+      {rows.length === 0 && <div className="muted">STAS トークンはまだ索引されていません</div>}
+      {rows.length > 0 && (
+        <table className="tok-table">
+          <thead>
+            <tr>
+              <th>トークン</th><th className="num">供給量</th>
+              <th className="num">保有者</th><th className="num">UTXO</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const f = rowFrame(r);
+              return (
+                <tr key={r.token}>
+                  <td>
+                    <div className="tok-cell">
+                      {f ? <TokenIcon frame={f} size={26} /> : <span className="tok-icon tok-initial" style={{ width: 26, height: 26, fontSize: 11 }}>?</span>}
+                      <a onClick={() => go(`/token/${r.token}`)}>
+                        {f ? tokenLabel(f) : `STAS ${shortHash(r.token)}`}
+                      </a>
+                      {f && <StasBadges f={f} />}
+                    </div>
+                  </td>
+                  <td className="num"><b>{fmtUnits(r.supply)}</b></td>
+                  <td className="num muted">{r.holders}</td>
+                  <td className="num muted">{r.utxos}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function TokenView({ id }: { id: string }) {
+  const [info, setInfo] = useState<any>(null);
+  const [holders, setHolders] = useState<TokenHolder[]>([]);
+  const [hist, setHist] = useState<Array<{ tx_hash: string; height: number }>>([]);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    setInfo(null); setHolders([]); setHist([]); setErr("");
+    api.token(id).then(setInfo).catch((e) => setErr(e.message || "取得エラー"));
+    api.tokenHolders(id).then(setHolders).catch(() => {});
+    api.tokenHistory(id).then((h) => setHist(h.slice().reverse())).catch(() => {});
+  }, [id]);
+  if (err) return <div className="card err">{err}</div>;
+  if (!info) return <div className="card muted">読み込み中…</div>;
+  const frame = rowFrame(info);
+  const meta: StasMeta = frame ? stasMeta(frame) : { traits: [] };
+  return (
+    <div className="card">
+      <div className="tok-head">
+        {frame
+          ? <TokenIcon frame={frame} size={52} />
+          : <span className="tok-icon tok-initial" style={{ width: 52, height: 52, fontSize: 22 }}>?</span>}
+        <div>
+          <h2 className="tok-title">
+            {frame ? tokenLabel(frame) : `STAS ${shortHash(id)}`}
+            {frame && <StasBadges f={frame} />}
+          </h2>
+          <div className="small muted mono">{id}</div>
+        </div>
+      </div>
+      {meta.description && <div className="small tok-desc">{meta.description}</div>}
+      <div className="stats">
+        <Stat label={info.nft ? "発行点数" : "供給量"} value={fmtUnits(info.supply || 0)} />
+        <Stat label="保有者" value={String(info.holders ?? 0)} />
+        <Stat label="UTXO" value={String(info.utxos ?? 0)} />
+        <Stat label="初出ブロック" value={info.first_height != null ? `#${info.first_height}` : "-"} />
+      </div>
+      {frame && (
+        <>
+          <Row
+            k="発行体 (protoID)"
+            v={frame.protoAddress || id}
+            mono
+            link={frame.protoAddress ? () => go(`/address/${frame.protoAddress}`) : undefined}
+          />
+          <Row k="flags" v={frame.flags.raw} mono />
+          {frame.freezeAuth && <Row k="凍結権限" v={hash160ToAddress(frame.freezeAuth) || frame.freezeAuth} mono />}
+          {frame.confiscateAuth && <Row k="没収権限" v={hash160ToAddress(frame.confiscateAuth) || frame.confiscateAuth} mono />}
+          <Row k="エンジン" v={`${frame.engineBytes.toLocaleString()} B`} />
+          <TraitGrid traits={meta.traits} />
+        </>
+      )}
+      <h3>保有者 ({holders.length})</h3>
+      {holders.length === 0 && <div className="muted small">保有者なし</div>}
+      {holders.length > 0 && (
+        <table className="tok-table">
+          <thead>
+            <tr><th>アドレス</th><th className="num">数量</th><th className="num">割合</th><th className="num">UTXO</th></tr>
+          </thead>
+          <tbody>
+            {holders.map((h) => (
+              <tr key={h.hash160}>
+                <td className="mono"><a onClick={() => go(`/address/${h.address}`)}>{h.address}</a></td>
+                <td className="num"><b>{fmtUnits(h.units)}</b></td>
+                <td className="num muted">
+                  {info.supply ? `${((h.units / info.supply) * 100).toFixed(2)}%` : "-"}
+                </td>
+                <td className="num muted">{h.utxos}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <h3>移転履歴 ({hist.length})</h3>
+      {hist.map((t) => (
+        <div key={`${t.tx_hash}-${t.height}`} className="mono small histrow">
+          <a onClick={() => go(`/tx/${t.tx_hash}`)}>{shortHash(t.tx_hash)}</a>
+          <span className="muted">{t.height ? `#${t.height}` : "未確定"}</span>
+        </div>
+      ))}
+      {hist.length === 0 && <div className="muted small">履歴なし</div>}
     </div>
   );
 }
@@ -488,7 +633,9 @@ function StasDetail({ f }: { f: StasFrame }) {
 function TokenIcon({ frame, size = 34 }: { frame: StasFrame; size?: number }) {
   const meta = stasMeta(frame);
   const img = meta.image && /^https:\/\//.test(meta.image) ? meta.image : null;
-  const initial = (meta.symbol || meta.name || "?").trim().charAt(0).toUpperCase();
+  // Unnamed issuances still deserve a stable mark: fall back to the protocol id.
+  const named = (meta.symbol || meta.name || "").trim();
+  const initial = named ? named.charAt(0).toUpperCase() : frame.protoId.slice(0, 2).toUpperCase();
   const style = { width: size, height: size, fontSize: Math.round(size * 0.42) };
   if (img) {
     return <img className="tok-icon" style={style} src={img} alt={meta.name || "token"} loading="lazy" />;
@@ -534,7 +681,7 @@ function TransferRow({ t }: { t: Transfer }) {
             {t.frame.flags.nft
               ? <b>{tokenId || "1 点"}</b>
               : <b>{fmtUnits(t.units)}</b>}
-            <a className="tok-name" onClick={() => setOpen(!open)}>{tokenLabel(t.frame)}</a>
+            <a className="tok-name" onClick={() => go(`/token/${t.frame.protoId}`)}>{tokenLabel(t.frame)}</a>
             <StasBadges f={t.frame} />
             <a className="stas-toggle muted" onClick={() => setOpen(!open)}>{open ? "詳細を閉じる" : "詳細"}</a>
           </div>
@@ -574,7 +721,9 @@ function NftCard({ frame, count }: { frame: StasFrame; count: number }) {
         {count > 1 && <span className="nft-count">×{count}</span>}
       </div>
       <div className="nft-meta">
-        <div className="nft-name">{meta.name || `STAS ${shortHash(frame.protoId)}`}</div>
+        <div className="nft-name">
+          <a onClick={() => go(`/token/${frame.protoId}`)}>{meta.name || `STAS ${shortHash(frame.protoId)}`}</a>
+        </div>
         <div className="small muted">
           {meta.tokenId ? `#${meta.tokenId}` : "NFT"}
           {frame.frozen && " · 凍結中"}

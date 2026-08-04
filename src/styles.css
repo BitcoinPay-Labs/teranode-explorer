@@ -97,6 +97,14 @@ td { padding: 8px; border-bottom: 1px solid #1c1c2a; }
   text-overflow: ellipsis; white-space: nowrap; }
 .nft-card .stas-detail { padding: 0 10px 10px; border-left: 0; margin-left: 0; }
 
+/* token tracker page */
+.nav { display: flex; gap: 14px; }
+.nav a { color: var(--muted); font-weight: 600; }
+.nav a:hover { color: var(--fg); text-decoration: none; }
+.tok-head { display: flex; gap: 14px; align-items: center; margin-bottom: 10px; }
+.tok-title { margin: 0 0 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tok-desc { color: var(--muted); margin: 0 0 12px; }
+
 /* trait tiles */
 .traits { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 8px; margin-top: 10px; }

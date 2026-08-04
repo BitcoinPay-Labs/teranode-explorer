@@ -38,7 +38,20 @@ export const api = {
   balance: (addr: string) => j(`/address/${addr}/balance`),
   unspent: (addr: string) => j(`/address/${addr}/unspent`),
   history: (addr: string) => j(`/address/${addr}/history`),
+  // STAS token views. Amounts are token units, not satoshis.
+  tokens: (limit = 100): Promise<TokenRow[]> => j(`/tokens?limit=${limit}`),
+  token: (id: string): Promise<TokenRow & { first_height: number; outputs_seen: number }> =>
+    j(`/token/${id}`),
+  tokenHolders: (id: string): Promise<TokenHolder[]> => j(`/token/${id}/holders`),
+  tokenHistory: (id: string): Promise<Array<{ tx_hash: string; height: number }>> =>
+    j(`/token/${id}/history`),
 };
+
+export interface TokenRow {
+  token: string; utxos: number; supply: number; holders: number;
+  flags: number | null; nft: boolean; script: string | null;
+}
+export interface TokenHolder { hash160: string; address: string; units: number; utxos: number }
 
 export const fmtAmount = (sats: number) =>
   (sats / SAT_PER_UNIT).toLocaleString(undefined, { maximumFractionDigits: 8 });
