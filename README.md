@@ -25,10 +25,20 @@ indexer endpoint configured at build time.
 
 Build-time environment variables:
 
-| Var            | Default                      | Meaning                     |
-| -------------- | ---------------------------- | --------------------------- |
-| `VITE_INDEXER` | `http://162.43.7.61:18101`   | Indexer / Asset proxy base  |
-| `VITE_NETWORK` | `Teratestnet`                | Network label shown in UI   |
+| Var            | Default                      | CI value      | Meaning                    |
+| -------------- | ---------------------------- | ------------- | -------------------------- |
+| `VITE_INDEXER` | `http://162.43.7.61:18101`   | `/api`        | Indexer / Asset proxy base |
+| `VITE_NETWORK` | `Teratestnet`                | `Teratestnet` | Network label shown in UI  |
+
+The production site is HTTPS, so `VITE_INDEXER` must stay a same-origin path there —
+a raw `http://…:18101` endpoint gets blocked as mixed content. Caddy proxies
+`e.btcp.io/api/*` to the indexer on `127.0.0.1:18101`.
+
+## Sibling deployment
+
+The JPYS-branded build (JPYS units, <https://e.jpys.btcp.io>) lives in its own
+repository, [`BitcoinPay-Labs/jpys-explorer`](https://github.com/BitcoinPay-Labs/jpys-explorer).
+Changes to shared UI code are not propagated automatically — port them by hand.
 
 ## Local development
 
