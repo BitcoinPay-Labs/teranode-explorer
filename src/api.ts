@@ -114,11 +114,14 @@ function sha256(data: Uint8Array): Uint8Array {
   return out;
 }
 
-const hexToBytes = (hex: string): Uint8Array => {
+export const hexToBytes = (hex: string): Uint8Array => {
   const b = new Uint8Array(hex.length / 2);
   for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return b;
 };
+
+export const bytesToHex = (b: Uint8Array): string =>
+  Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
 function base58check(payload: Uint8Array): string {
   const chk = sha256(sha256(payload)).slice(0, 4);
@@ -132,14 +135,19 @@ function base58check(payload: Uint8Array): string {
   return s;
 }
 
+/** 20-byte HASH160 (hex) → testnet address. */
+export function hash160ToAddress(h160: string): string | null {
+  if (!/^[0-9a-fA-F]{40}$/.test(h160 || "")) return null;
+  const payload = new Uint8Array(21);
+  payload[0] = P2PKH_VERSION;
+  payload.set(hexToBytes(h160), 1);
+  return base58check(payload);
+}
+
 /** P2PKH lockingScript → testnet address; null for non-standard scripts. */
 export function scriptToAddress(lockingScript: string): string | null {
   const m = /^76a914([0-9a-fA-F]{40})88ac$/.exec(lockingScript || "");
-  if (!m) return null;
-  const payload = new Uint8Array(21);
-  payload[0] = P2PKH_VERSION;
-  payload.set(hexToBytes(m[1]), 1);
-  return base58check(payload);
+  return m ? hash160ToAddress(m[1]) : null;
 }
 
 /** Extract the human-readable miner tag from a coinbase unlockingScript. */

@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   api, fmtAmount, fmtBsv, classify, NETWORK_LABEL, APP_TITLE, SYMBOL, LOGO, BlockRow,
-  scriptToAddress, coinbaseTag, isCoinbaseInput,
+  scriptToAddress, coinbaseTag, isCoinbaseInput, hash160ToAddress,
 } from "./api";
+import { parseStas, stasKind, stasMeta, StasFrame } from "./stas";
 
 type Route =
   | { v: "home" }
@@ -193,12 +194,23 @@ function TxView({ txid }: { txid: string }) {
   const ins = data.inputs || data.vin || [];
   const outs = data.outputs || data.vout || [];
   const coinbase = ins.length > 0 && ins.every(isCoinbaseInput);
-  const totalOut = outs.reduce((s: number, o: any) => s + (o.satoshis ?? o.value ?? 0), 0);
+  // A STAS frame carries its token amount in the satoshi field, so folding those
+  // outputs into the satoshi total would state a value the transaction never moved.
+  const frames: Array<StasFrame | null> = outs.map((o: any) => parseStas(o.lockingScript || ""));
+  const tokenCount = frames.filter(Boolean).length;
+  const totalOut = outs.reduce(
+    (s: number, o: any, i: number) => (frames[i] ? s : s + (o.satoshis ?? o.value ?? 0)),
+    0,
+  );
   return (
     <div className="card">
       <h2>トランザクション {coinbase && <span className="net">coinbase</span>}</h2>
       <Row k="txid" v={txid} mono />
-      <Row k="出力合計" v={`${fmtAmount(totalOut)} ${SYMBOL}`} />
+      <Row
+        k={tokenCount ? "出力合計 (トークン以外)" : "出力合計"}
+        v={`${fmtAmount(totalOut)} ${SYMBOL}`}
+      />
+      {tokenCount > 0 && <Row k="トークン出力" v={`${tokenCount} 件 (STAS 3.0)`} />}
       <div className="io">
         <div>
           <h3>入力 ({ins.length})</h3>
@@ -216,13 +228,16 @@ function TxView({ txid }: { txid: string }) {
         <div>
           <h3>出力 ({outs.length})</h3>
           {outs.map((o: any, n: number) => {
-            const addr = scriptToAddress(o.lockingScript || "");
+            const script = o.lockingScript || "";
+            const addr = scriptToAddress(script);
+            const token = frames[n];
+            if (token) return <StasOutput key={n} frame={token} satoshis={o.satoshis ?? o.value ?? 0} />;
             return (
               <div key={n} className="small histrow">
                 <span className="mono">
                   {addr
                     ? <a onClick={() => go(`/address/${addr}`)}>{addr}</a>
-                    : shortHash(o.lockingScript || "")}
+                    : shortHash(script)}
                 </span>
                 <b>{fmtAmount(o.satoshis ?? o.value ?? 0)} {SYMBOL}</b>
               </div>
@@ -245,6 +260,11 @@ function AddressView({ addr }: { addr: string }) {
       .then(([b, u, h]) => { setBal(b); setUtxos(u); setHist(h.slice().reverse()); })
       .catch((e) => setErr(e.message));
   }, [addr]);
+  const holdings = useMemo(() => stasHoldings(utxos), [utxos]);
+  // The indexer counts every UTXO in satoshis, but a token frame's satoshi value
+  // is its token amount — subtract it so the BSV balance is not overstated.
+  const tokenSats = holdings.reduce((s, h) => s + h.units, 0);
+  const spendable = bal ? (bal.spendable ?? bal.confirmed ?? 0) - tokenSats : 0;
   if (err) return <div className="card err">{err}</div>;
   return (
     <div className="card">
@@ -252,11 +272,34 @@ function AddressView({ addr }: { addr: string }) {
       <Row k="アドレス" v={addr} mono />
       <Row k="hash160" v={bal?.hash160 || "…"} mono />
       <div className="stats">
-        <Stat label="使用可能" value={bal ? `${fmtAmount(bal.spendable ?? bal.confirmed)} ${SYMBOL}` : "…"} />
+        <Stat
+          label={tokenSats ? "使用可能 (トークン除く)" : "使用可能"}
+          value={bal ? `${fmtAmount(spendable)} ${SYMBOL}` : "…"}
+        />
         <Stat label="未成熟(coinbase)" value={bal ? `${fmtAmount(bal.immature || 0)} ${SYMBOL}` : "…"} />
         <Stat label="未確定" value={bal ? `${fmtAmount(bal.unconfirmed || 0)} ${SYMBOL}` : "…"} />
         <Stat label="UTXO件数" value={String(utxos.length)} />
       </div>
+      {holdings.length > 0 && (
+        <>
+          <h3>保有トークン ({holdings.length})</h3>
+          {holdings.map((h) => (
+            <div key={`${h.frame.protoId}-${h.frame.flags.nft}`} className="stas-out">
+              <div className="small histrow">
+                <span className="mono">
+                  {shortHash(stasMeta(h.frame).name || h.frame.protoAddress || h.frame.protoId)}
+                  <StasBadges f={h.frame} />
+                </span>
+                <b>
+                  {h.frame.flags.nft
+                    ? `${h.count} 点`
+                    : `${fmtUnits(h.units)} 単位 / ${h.count} UTXO`}
+                </b>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
       <h3>取引履歴 ({hist.length})</h3>
       {hist.map((t: any) => (
         <div key={`${t.tx_hash}-${t.height}`} className="mono small histrow">
@@ -267,6 +310,117 @@ function AddressView({ addr }: { addr: string }) {
       {hist.length === 0 && <div className="muted">履歴なし</div>}
     </div>
   );
+}
+
+// ---- STAS 3.0 tokens ------------------------------------------------------
+
+function StasBadges({ f }: { f: StasFrame }) {
+  return (
+    <span className="badges">
+      <span className={"badge" + (f.flags.nft ? " nft" : "")}>{stasKind(f)}</span>
+      {f.flags.augmentable && <span className="badge">追記可</span>}
+      {f.flags.freezable && <span className="badge">凍結可</span>}
+      {f.flags.confiscatable && <span className="badge">没収可</span>}
+      {f.frozen && <span className="badge warn">凍結中</span>}
+      {f.var2.kind === "swap" && <span className="badge warn">スワップ待ち</span>}
+      {f.var2.kind === "directive" && <span className="badge warn">追記指示</span>}
+    </span>
+  );
+}
+
+/** Token amount. STAS carries the amount in the satoshi value of the frame. */
+const fmtUnits = (n: number) => n.toLocaleString();
+
+function StasDetail({ f }: { f: StasFrame }) {
+  const meta = stasMeta(f);
+  const img = meta.image && /^https:\/\//.test(meta.image) ? meta.image : null;
+  return (
+    <div className="stas-detail">
+      {(meta.name || meta.symbol) && (
+        <Row k="名称" v={[meta.name, meta.symbol && `(${meta.symbol})`].filter(Boolean).join(" ")} />
+      )}
+      {meta.description && <Row k="説明" v={meta.description} />}
+      <Row
+        k="発行体 (protoID)"
+        v={f.protoAddress || f.protoId}
+        mono
+        link={f.protoAddress ? () => go(`/address/${f.protoAddress}`) : undefined}
+      />
+      <Row
+        k="保有者"
+        v={f.ownerUnlocked ? "署名検証なし (HASH160(\"\"))" : f.ownerAddress || f.owner}
+        mono
+        link={!f.ownerUnlocked && f.ownerAddress ? () => go(`/address/${f.ownerAddress}`) : undefined}
+      />
+      <Row k="flags" v={f.flags.raw} mono />
+      {f.freezeAuth && (
+        <Row k="凍結権限" v={hash160ToAddress(f.freezeAuth) || f.freezeAuth} mono />
+      )}
+      {f.confiscateAuth && (
+        <Row k="没収権限" v={hash160ToAddress(f.confiscateAuth) || f.confiscateAuth} mono />
+      )}
+      {f.var2.kind === "swap" && (
+        <>
+          <Row k="希望スクリプト" v={f.var2.requestedScriptHash} mono />
+          <Row k="受取先" v={f.var2.receiveAddr || "-"} mono />
+          <Row
+            k="レート"
+            v={f.var2.rateNumerator === 0
+              ? "指定なし"
+              : `${f.var2.rateNumerator} / ${f.var2.rateDenominator}`}
+          />
+        </>
+      )}
+      {f.var2.kind === "directive" && <Row k="次の spend で追記" v={f.var2.data} mono />}
+      {f.var2.kind === "passive" && f.var2.note && <Row k="メモ (var2)" v={f.var2.note} />}
+      {f.var2.kind === "unknown" && (
+        <Row k="var2" v={`未知のアクション 0x${f.var2.action.toString(16).padStart(2, "0")}`} />
+      )}
+      <Row k="エンジン" v={`${f.engineBytes.toLocaleString()} B`} />
+      {img && <img className="stas-img" src={img} alt={meta.name || "token image"} loading="lazy" />}
+      {f.payloadText && !f.payloadJson && <Row k="データ" v={f.payloadText} />}
+      {f.payloadJson && (
+        <pre className="stas-json mono small">{JSON.stringify(f.payloadJson, null, 2)}</pre>
+      )}
+      {!f.payloadText && f.payloads.length > 0 && (
+        <Row k="データ" v={`${f.payloads.length} 件 (バイナリ ${f.payloads.join("").length / 2} B)`} mono />
+      )}
+    </div>
+  );
+}
+
+function StasOutput({ frame, satoshis }: { frame: StasFrame; satoshis: number }) {
+  const [open, setOpen] = useState(false);
+  const meta = stasMeta(frame);
+  const label = meta.name || meta.symbol || frame.protoAddress || frame.protoId;
+  return (
+    <div className="stas-out">
+      <div className="small histrow">
+        <span className="mono">
+          <a className="stas-toggle" onClick={() => setOpen(!open)}>
+            {open ? "▾" : "▸"} {shortHash(label)}
+          </a>
+          <StasBadges f={frame} />
+        </span>
+        <b>{frame.flags.nft ? "1 点" : `${fmtUnits(satoshis)} 単位`}</b>
+      </div>
+      {open && <StasDetail f={frame} />}
+    </div>
+  );
+}
+
+/** Group STAS UTXOs of an address by issuance, for the holdings table. */
+function stasHoldings(utxos: any[]): Array<{ frame: StasFrame; count: number; units: number }> {
+  const byProto = new Map<string, { frame: StasFrame; count: number; units: number }>();
+  for (const u of utxos) {
+    const f = parseStas(u.script || "");
+    if (!f) continue;
+    const key = `${f.protoId}:${f.flags.nft}`;
+    const cur = byProto.get(key);
+    if (cur) { cur.count++; cur.units += u.value ?? u.satoshis ?? 0; }
+    else byProto.set(key, { frame: f, count: 1, units: u.value ?? u.satoshis ?? 0 });
+  }
+  return [...byProto.values()].sort((a, b) => b.units - a.units);
 }
 
 function Stat({ label, value, mono }: { label: string; value: any; mono?: boolean }) {
