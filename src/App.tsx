@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  api, BSV, classify, NETWORK_LABEL, BlockRow,
+  api, fmtAmount, fmtBsv, classify, NETWORK_LABEL, APP_TITLE, SYMBOL, LOGO, BlockRow,
   scriptToAddress, coinbaseTag, isCoinbaseInput,
 } from "./api";
 
@@ -29,6 +29,7 @@ export default function App() {
   const [err, setErr] = useState("");
 
   useEffect(() => {
+    document.title = APP_TITLE;
     const onHash = () => { setErr(""); setRoute(parseHash()); };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -64,7 +65,7 @@ export default function App() {
     <div className="app">
       <header>
         <div className="brand" onClick={() => go("/")}>
-          <span className="logo">◆</span> Teranode Explorer
+          {LOGO && <span className="logo">{LOGO}</span>} {APP_TITLE}
           <span className="net">{NETWORK_LABEL}</span>
         </div>
         <form className="searchbar" onSubmit={(e) => { e.preventDefault(); search(q); }}>
@@ -155,7 +156,7 @@ function BlockView({ hash }: { hash: string }) {
       <Row k="Tx件数" v={String(data.transaction_count ?? "-")} />
       <Row k="サイズ" v={data.size_in_bytes != null ? `${data.size_in_bytes} B` : "-"} />
       <Row k="マイナー" v={tag} />
-      <Row k="ブロック報酬" v={reward ? `${BSV(reward)} BSV` : "-"} />
+      <Row k="ブロック報酬" v={reward ? `${fmtBsv(reward)} BSV` : "-"} />
       <Row k="coinbase txid" v={cb.txid} mono link={cb.txid ? () => go(`/tx/${cb.txid}`) : undefined} />
     </div>
   );
@@ -178,7 +179,7 @@ function TxView({ txid }: { txid: string }) {
     <div className="card">
       <h2>トランザクション {coinbase && <span className="net">coinbase</span>}</h2>
       <Row k="txid" v={txid} mono />
-      <Row k="出力合計" v={`${BSV(totalOut)} BSV`} />
+      <Row k="出力合計" v={`${fmtAmount(totalOut)} ${SYMBOL}`} />
       <div className="io">
         <div>
           <h3>入力 ({ins.length})</h3>
@@ -204,7 +205,7 @@ function TxView({ txid }: { txid: string }) {
                     ? <a onClick={() => go(`/address/${addr}`)}>{addr}</a>
                     : shortHash(o.lockingScript || "")}
                 </span>
-                <b>{BSV(o.satoshis ?? o.value ?? 0)} BSV</b>
+                <b>{fmtAmount(o.satoshis ?? o.value ?? 0)} {SYMBOL}</b>
               </div>
             );
           })}
@@ -232,9 +233,9 @@ function AddressView({ addr }: { addr: string }) {
       <Row k="アドレス" v={addr} mono />
       <Row k="hash160" v={bal?.hash160 || "…"} mono />
       <div className="stats">
-        <Stat label="使用可能" value={bal ? `${BSV(bal.spendable ?? bal.confirmed)} BSV` : "…"} />
-        <Stat label="未成熟(coinbase)" value={bal ? `${BSV(bal.immature || 0)} BSV` : "…"} />
-        <Stat label="未確定" value={bal ? `${BSV(bal.unconfirmed || 0)} BSV` : "…"} />
+        <Stat label="使用可能" value={bal ? `${fmtAmount(bal.spendable ?? bal.confirmed)} ${SYMBOL}` : "…"} />
+        <Stat label="未成熟(coinbase)" value={bal ? `${fmtAmount(bal.immature || 0)} ${SYMBOL}` : "…"} />
+        <Stat label="未確定" value={bal ? `${fmtAmount(bal.unconfirmed || 0)} ${SYMBOL}` : "…"} />
         <Stat label="UTXO件数" value={String(utxos.length)} />
       </div>
       <h3>取引履歴 ({hist.length})</h3>

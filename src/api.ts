@@ -4,6 +4,16 @@ export const INDEXER: string =
   (import.meta as any).env?.VITE_INDEXER || "http://162.43.7.61:18101";
 export const NETWORK_LABEL: string =
   (import.meta as any).env?.VITE_NETWORK || "Teratestnet";
+export const APP_TITLE: string =
+  (import.meta as any).env?.VITE_APP_TITLE || "Teranode Explorer";
+// ヘッダーのロゴ文字。空文字列を明示指定すると非表示
+export const LOGO: string =
+  (import.meta as any).env?.VITE_LOGO ?? "◆";
+export const SYMBOL: string =
+  (import.meta as any).env?.VITE_SYMBOL || "BSV";
+// satoshi→表示単位の除数。BSV=1e8、JPYS など satoshi 建て表示なら 1
+export const SAT_PER_UNIT: number =
+  Number((import.meta as any).env?.VITE_SAT_PER_UNIT || 1e8);
 
 async function j<T = any>(path: string): Promise<T> {
   const r = await fetch(INDEXER + path);
@@ -30,7 +40,11 @@ export const api = {
   history: (addr: string) => j(`/address/${addr}/history`),
 };
 
-export const BSV = (sats: number) =>
+export const fmtAmount = (sats: number) =>
+  (sats / SAT_PER_UNIT).toLocaleString(undefined, { maximumFractionDigits: 8 });
+
+// ブロック報酬など、表示単位に関係なく常に BSV 建てで見せたい箇所用
+export const fmtBsv = (sats: number) =>
   (sats / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 });
 
 export type Query =
