@@ -669,7 +669,7 @@ function TransferRow({ t }: { t: Transfer }) {
               ? <span className="pill mint">発行</span>
               : t.from
                 ? <a className="mono" onClick={() => go(`/address/${t.from}`)}>{shortHash(t.from)}</a>
-                : <span className="muted mono">-</span>}
+                : <span className="muted">署名検証なし</span>}
             <span className="arrow">→</span>
             <span className="muted">To</span>
             {t.to
